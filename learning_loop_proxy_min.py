@@ -69,9 +69,71 @@ def get_embedding(text: str) -> list[float]:
 app = FastAPI(title="Learning Loop Proxy (Minimal)")
 
 
+# ---------------------------------------------------------------------------
+# Consent Boundary — data-sensitivity tagging and policy layer
+# ---------------------------------------------------------------------------
+# Every provider currently supported (Groq, Gemini) is an external, third-party
+# API. This layer does not block calls to them -- it classifies each prompt's
+# sensitivity and, when a confidential prompt is about to leave the local
+# environment, attaches a clear warning so the caller can make an informed
+# decision. This is a "consent boundary" in the sense Nadella describes:
+# visibility and warning before data crosses the boundary, not a hard block.
+
+SENSITIVITY_LEVELS = ("public", "internal", "confidential", "unclassified")
+EXTERNAL_PROVIDERS = {"groq", "gemini"}  # both leave the local environment today
+
+
+def auto_detect_sensitivity(text: str) -> str | None:
+    """
+    Placeholder for future automatic sensitivity classification.
+
+    Not implemented yet -- always returns None, which causes the caller
+    to fall back to "unclassified". Intended future implementations:
+    keyword/regex matching against known-sensitive terms, or a small
+    local classifier model. Keeping this as an isolated function now
+    means auto-detection can be dropped in later without changing any
+    call site in /chat or /chat-with-context.
+    """
+    return None
+
+
+def check_sensitivity_policy(sensitivity: str, provider: str) -> str | None:
+    """
+    Evaluate whether sending data of this sensitivity to this provider
+    should raise a warning. Returns a warning string if so, else None.
+
+    Current policy: confidential data sent to any external provider is
+    allowed to proceed, but flagged with an explicit warning that is
+    both returned to the caller and recorded in the log, so there is
+    an auditable trail of every boundary crossing.
+    """
+    if sensitivity == "confidential" and provider in EXTERNAL_PROVIDERS:
+        return (
+            f"This prompt was marked 'confidential' but was sent to an external "
+            f"provider ('{provider}'). Review before reuse or further sharing."
+        )
+    return None
+
+
+def resolve_sensitivity(explicit_sensitivity: str | None, prompt: str) -> str:
+    """
+    Determine the sensitivity level to use for a request: the caller's
+    explicit value takes priority; if not provided, fall back to
+    auto-detection (currently a stub); if that also yields nothing,
+    default to "unclassified".
+    """
+    if explicit_sensitivity:
+        value = explicit_sensitivity.lower().strip()
+        if value in SENSITIVITY_LEVELS:
+            return value
+    detected = auto_detect_sensitivity(prompt)
+    return detected if detected in SENSITIVITY_LEVELS else "unclassified"
+
+
 class ChatRequest(BaseModel):
     prompt: str
     provider: str = "groq"  # "groq" or "gemini"
+    sensitivity: str | None = None  # "public" | "internal" | "confidential"; defaults to auto-detect -> "unclassified"
 
 
 class CorrectionRequest(BaseModel):
@@ -84,6 +146,7 @@ class ChatWithContextRequest(BaseModel):
     prompt: str
     provider: str = "groq"  # "groq" or "gemini"
     top_k: int = 3  # how many past interactions to retrieve as context
+    sensitivity: str | None = None  # "public" | "internal" | "confidential"; defaults to auto-detect -> "unclassified"
 
 
 @app.get("/")
@@ -94,6 +157,8 @@ def root():
 @app.post("/chat")
 def chat(request: ChatRequest):
     provider = request.provider.lower().strip()
+    sensitivity = resolve_sensitivity(request.sensitivity, request.prompt)
+    policy_warning = check_sensitivity_policy(sensitivity, provider)
 
     if provider == "groq":
         try:
@@ -131,6 +196,8 @@ def chat(request: ChatRequest):
         "model_used": model_used,
         "feedback": None,
         "correction": None,
+        "sensitivity": sensitivity,
+        "policy_warning": policy_warning,
     }
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -140,6 +207,8 @@ def chat(request: ChatRequest):
         "response": answer,
         "provider": provider,
         "model_used": model_used,
+        "sensitivity": sensitivity,
+        "policy_warning": policy_warning,
     }
 
 
@@ -270,6 +339,8 @@ def chat_with_context(request: ChatWithContextRequest):
         )
 
     provider = request.provider.lower().strip()
+    sensitivity = resolve_sensitivity(request.sensitivity, request.prompt)
+    policy_warning = check_sensitivity_policy(sensitivity, provider)
 
     matches = retrieve_context(request.prompt, request.top_k)
     context_block = build_context_block(matches)
@@ -315,6 +386,8 @@ def chat_with_context(request: ChatWithContextRequest):
         "feedback": None,
         "correction": None,
         "used_context": [m["prompt"] for m in matches],
+        "sensitivity": sensitivity,
+        "policy_warning": policy_warning,
     }
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -325,4 +398,6 @@ def chat_with_context(request: ChatWithContextRequest):
         "provider": provider,
         "model_used": model_used,
         "context_used": matches,
+        "sensitivity": sensitivity,
+        "policy_warning": policy_warning,
     }
