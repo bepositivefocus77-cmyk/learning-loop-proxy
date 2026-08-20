@@ -1,0 +1,16 @@
+# Environment variables / secrets
+.env
+
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local interaction log (contains real prompt/response data)
+learning_log.jsonl
+
+# Editor/OS files
+.vscode/
+.DS_Store

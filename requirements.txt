@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+groq
+python-dotenv
+google-generativeai
+streamlit
+pandas
+pinecone
+sentence-transformers
