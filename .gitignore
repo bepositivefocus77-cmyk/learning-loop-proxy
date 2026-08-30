@@ -10,6 +10,7 @@ __pycache__/
 
 # Local interaction log (contains real prompt/response data)
 learning_log.jsonl
+learning_loop.db
 
 # Editor/OS files
 .vscode/
